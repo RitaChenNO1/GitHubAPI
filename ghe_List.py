@@ -13,6 +13,11 @@ db_user = cf.get("vertica_db", "db_user")
 db_pass = cf.get("vertica_db", "db_pass")
 db_database = cf.get("vertica_db", "db_database")
 read_timeout = cf.getint("vertica_db", "read_timeout")
+
+#get the last since value
+usercf =ConfigParser.SafeConfigParser()
+usercf.read("user.ini")
+pre_since = usercf.getint("user", "pre_since")
 #connect to vertica
 def vertica_BuildConnect():
         conn_info = {'host': db_host,
@@ -65,17 +70,20 @@ def ghe_get_nextBatch(header_link):
                 start = header_link.find("https:")
                 end = header_link.find(">;")
         else:
-                return ""
-        return header_link[start:end]
+                return "", "0"
+        return header_link[start:end], header_link[next_found+len("since="):end]
 
-def ghe_getList(tableName,type,per_page):
+
+def ghe_getList(tableName,type,pre_since,per_page):
         #1. set the url, and start batch
-        url = ghe_url+"/api/v3/%s?per_page=%s" %(type,per_page)
+        #every time, start from the since value of last batch, incremental to add data
+        url = ghe_url+"/api/v3/%s?per_page=%s&since=%s" %(type,per_page,pre_since)
         print(url)
         next_batch_exists=True
         #2. create vertica connection
         vertica_con=vertica_BuildConnect()
         cur = vertica_con.cursor()
+        since_last=pre_since
         while next_batch_exists:
             #3. start to request data for every batch, every batch 30 rows by default
             request = urllib2.Request(url)
@@ -89,12 +97,18 @@ def ghe_getList(tableName,type,per_page):
             json2VerticaTable(tableName,repos_batch,cur)
             vertica_con.commit()
             #5. Get the url for the next batch
-            url_next = ghe_get_nextBatch(response.info().getheader('Link'))
+            url_next, since_next = ghe_get_nextBatch(response.info().getheader('Link'))
+            #print(url_next)
+            #print("since=:"+since_next)
             #check next bactch is there or not
             if(len(url_next)!=0):
                 url = url_next
+                since_last=since_next
+                usercf.set("user","pre_since",since_last)
+                usercf.write(open("user.ini", "w"))
             else:
                 next_batch_exists = False
+                #remember the since id to config
         #6. close the connection of vertica
         vertica_con.close()
-ghe_getList("gitlist.userslist","users","100")
+ghe_getList("gitlist.userslist","users",pre_since,"100")
