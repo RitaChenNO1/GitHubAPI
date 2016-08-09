@@ -1,5 +1,5 @@
 __author__ = 'chzhenzh'
-import urllib2,json,vertica_python,ConfigParser
+import urllib2,json,vertica_python,ConfigParser,nested_dict
 from nested_dict import nested_dict
 #get github config
 cf = ConfigParser.ConfigParser()
@@ -15,9 +15,19 @@ db_database = cf.get("vertica_db", "db_database")
 read_timeout = cf.getint("vertica_db", "read_timeout")
 
 #get the last since value
-usercf =ConfigParser.SafeConfigParser()
-usercf.read("user.ini")
-pre_since = usercf.getint("user", "pre_since")
+def get_preSince(filename,apistr):
+    usercf = ConfigParser.SafeConfigParser()
+    usercf.read(filename)
+    pre_since = usercf.getint(apistr, "pre_since")
+    return pre_since
+
+def set_preSince(filename,apistr,since_last):
+    usercf = ConfigParser.SafeConfigParser()
+    usercf.read(filename)
+    usercf.set(apistr,"pre_since",since_last)
+    usercf.write(open(filename, "w"))
+
+
 #connect to vertica
 def vertica_BuildConnect():
         conn_info = {'host': db_host,
@@ -65,20 +75,27 @@ def json2VerticaTable(tableName,jsonData,cur):
                         i=i+1
 
 def ghe_get_nextBatch(header_link):
-        next_found = header_link.find("since=")
-        if(0 < next_found):
-                start = header_link.find("https:")
-                end = header_link.find(">;")
+        if header_link is None:
+            return "", "0"
         else:
-                return "", "0"
+            next_found = header_link.find("since=")
+            print type(next_found)
+            print next_found
+            if(0 < next_found):
+                    start = header_link.find("https:")
+                    end = header_link.find(">;")
+            else:
+                    return "", "0"
         return header_link[start:end], header_link[next_found+len("since="):end]
 
 
-def ghe_getList(tableName,type,pre_since,per_page):
+def ghe_getList(tableName,type,pre_since,per_page,filename,apistr):
         #1. set the url, and start batch
         #every time, start from the since value of last batch, incremental to add data
+        # https://github.hpe.com/api/v3/users/per_page=100&since=305
         url = ghe_url+"/api/v3/%s?per_page=%s&since=%s" %(type,per_page,pre_since)
         print(url)
+
         next_batch_exists=True
         #2. create vertica connection
         vertica_con=vertica_BuildConnect()
@@ -98,17 +115,23 @@ def ghe_getList(tableName,type,pre_since,per_page):
             vertica_con.commit()
             #5. Get the url for the next batch
             url_next, since_next = ghe_get_nextBatch(response.info().getheader('Link'))
-            #print(url_next)
-            #print("since=:"+since_next)
+            print("since=:"+since_next)
             #check next bactch is there or not
             if(len(url_next)!=0):
                 url = url_next
                 since_last=since_next
-                usercf.set("user","pre_since",since_last)
-                usercf.write(open("user.ini", "w"))
+                set_preSince(filename,apistr,since_last)
             else:
                 next_batch_exists = False
                 #remember the since id to config
         #6. close the connection of vertica
         vertica_con.close()
-ghe_getList("gitlist.userslist","users",pre_since,"100")
+        print ("***************************One Batch Loading Done****************************************")
+
+# pre_since = get_preSince("user.ini","user")
+# ghe_getList("gitlist.userslist","users",pre_since,"100","user.ini","user")
+pre_since = get_preSince("org.ini","org")
+ghe_getList("gitlist.orgList","organizations",pre_since,"100","org.ini","org")
+
+# pre_since = get_preSince("team.ini","team")
+# ghe_getList("gitlist.teamList","orgs/FutureState/teams",pre_since,"100","team.ini","team")
